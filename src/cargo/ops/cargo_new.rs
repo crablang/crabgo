@@ -183,12 +183,12 @@ fn check_name(
                 "\n\
                 If you need a binary with the name \"{name}\", use a valid package \
                 name, and set the binary name to be different from the package. \
-                This can be done by setting the binary filename to `src/bin/{name}.crab` \
+                This can be done by setting the binary filename to `src/bin/{name}.🦀` \
                 or change the name in Cargo.toml with:\n\
                 \n    \
                 [[bin]]\n    \
                 name = \"{name}\"\n    \
-                path = \"src/main.crab\"\n\
+                path = \"src/main.🦀\"\n\
             ",
                 name = name
             ));
