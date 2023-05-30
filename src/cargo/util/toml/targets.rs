@@ -184,11 +184,11 @@ fn clean_lib(
         (Some(path), _) => package_root.join(&path.0),
         (None, Some(path)) => path,
         (None, None) => {
-            let legacy_path = package_root.join("src").join(format!("{}.crab", lib.name()));
+            let legacy_path = package_root.join("src").join(format!("{}.🦀", lib.name()));
             if edition == Edition::Edition2015 && legacy_path.exists() {
                 warnings.push(format!(
                     "path `{}` was erroneously implicitly accepted for library `{}`,\n\
-                     please rename the file to `src/lib.crab` or set lib.path in Cargo.toml",
+                     please rename the file to `src/lib.🦀` or set lib.path in Cargo.toml",
                     legacy_path.display(),
                     lib.name()
                 ));
