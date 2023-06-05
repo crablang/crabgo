@@ -1334,13 +1334,13 @@ fn cargo_default_env_metadata_env_var() {
 [COMPILING] bar v0.0.1 ([CWD]/bar)
 [RUNNING] `rustc --crate-name bar bar/src/lib.rs [..]--crate-type dylib \
         --emit=[..]link \
-        -C prefer-dynamic[..]-C debuginfo=2 \
+        -C prefer-dynamic[..]-C debuginfo=2 [..]\
         -C metadata=[..] \
         --out-dir [..] \
         -L dependency=[CWD]/target/debug/deps`
 [COMPILING] foo v0.0.1 ([CWD])
 [RUNNING] `rustc --crate-name foo src/lib.rs [..]--crate-type lib \
-        --emit=[..]link[..]-C debuginfo=2 \
+        --emit=[..]link[..]-C debuginfo=2 [..]\
         -C metadata=[..] \
         -C extra-filename=[..] \
         --out-dir [..] \
@@ -1362,13 +1362,13 @@ fn cargo_default_env_metadata_env_var() {
 [COMPILING] bar v0.0.1 ([CWD]/bar)
 [RUNNING] `rustc --crate-name bar bar/src/lib.rs [..]--crate-type dylib \
         --emit=[..]link \
-        -C prefer-dynamic[..]-C debuginfo=2 \
+        -C prefer-dynamic[..]-C debuginfo=2 [..]\
         -C metadata=[..] \
         --out-dir [..] \
         -L dependency=[CWD]/target/debug/deps`
 [COMPILING] foo v0.0.1 ([CWD])
 [RUNNING] `rustc --crate-name foo src/lib.rs [..]--crate-type lib \
-        --emit=[..]link[..]-C debuginfo=2 \
+        --emit=[..]link[..]-C debuginfo=2 [..]\
         -C metadata=[..] \
         -C extra-filename=[..] \
         --out-dir [..] \
@@ -2053,7 +2053,7 @@ fn verbose_build() {
             "\
 [COMPILING] foo v0.0.1 ([CWD])
 [RUNNING] `rustc --crate-name foo src/lib.rs [..]--crate-type lib \
-        --emit=[..]link[..]-C debuginfo=2 \
+        --emit=[..]link[..]-C debuginfo=2 [..]\
         -C metadata=[..] \
         --out-dir [..] \
         -L dependency=[CWD]/target/debug/deps`
@@ -4074,7 +4074,7 @@ fn message_format_json_forward_stderr() {
                     },
                     "profile":{
                         "debug_assertions":false,
-                        "debuginfo":null,
+                        "debuginfo":0,
                         "opt_level":"3",
                         "overflow_checks": false,
                         "test":false
@@ -5432,7 +5432,7 @@ fn targets_selected_all() {
         // Unit tests.
         .with_stderr_contains(
             "[RUNNING] `rustc --crate-name foo src/main.rs [..]--emit=[..]link[..]\
-             -C debuginfo=2 --test [..]",
+             -C debuginfo=2 [..]--test [..]",
         )
         .run();
 }
@@ -5449,7 +5449,7 @@ fn all_targets_no_lib() {
         // Unit tests.
         .with_stderr_contains(
             "[RUNNING] `rustc --crate-name foo src/main.rs [..]--emit=[..]link[..]\
-             -C debuginfo=2 --test [..]",
+             -C debuginfo=2 [..]--test [..]",
         )
         .run();
 }
@@ -5566,6 +5566,8 @@ fn good_jobs() {
     p.cargo("build --jobs 1").run();
 
     p.cargo("build --jobs -1").run();
+
+    p.cargo("build --jobs default").run();
 }
 
 #[cargo_test]
@@ -5599,8 +5601,8 @@ fn invalid_jobs() {
         .run();
 
     p.cargo("build --jobs over9000")
-        .with_status(1)
-        .with_stderr("error: Invalid value: could not parse `over9000` as a number")
+        .with_status(101)
+        .with_stderr("error: could not parse `over9000`. Number of parallel jobs should be `default` or a number.")
         .run();
 }
 
@@ -5920,7 +5922,7 @@ fn build_lib_only() {
             "\
 [COMPILING] foo v0.0.1 ([CWD])
 [RUNNING] `rustc --crate-name foo src/lib.rs [..]--crate-type lib \
-        --emit=[..]link[..]-C debuginfo=2 \
+        --emit=[..]link[..]-C debuginfo=2 [..]\
         -C metadata=[..] \
         --out-dir [..] \
         -L dependency=[CWD]/target/debug/deps`
