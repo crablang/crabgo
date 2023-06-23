@@ -83,14 +83,14 @@ Available unstable (nightly-only) flags:
 
 {}
 
-Run with 'cargo -Z [FLAG] [COMMAND]'",
+Run with 'crabgo -Z [FLAG] [COMMAND]'",
             joined
         );
         if !config.nightly_features_allowed {
             drop_println!(
                 config,
                 "\nUnstable flags are only available on the nightly channel \
-                 of Cargo, but this is the `{}` channel.\n\
+                 of Crabgo, but this is the `{}` channel.\n\
                  {}",
                 features::channel(),
                 features::SEE_CHANNELS
@@ -98,7 +98,7 @@ Run with 'cargo -Z [FLAG] [COMMAND]'",
         }
         drop_println!(
             config,
-            "\nSee https://doc.rust-lang.org/nightly/cargo/reference/unstable.html \
+            "\nSee https://book.crablang.org/nightly/cargo/reference/unstable.html \
              for more information about these flags."
         );
         return Ok(());
@@ -124,12 +124,12 @@ Run with 'cargo -Z [FLAG] [COMMAND]'",
         // might become internal in the future).
         let known_external_command_descriptions = HashMap::from([
             (
-                "clippy",
-                "Checks a package to catch common mistakes and improve your Rust code.",
+                "pinchy",
+                "Checks a package to catch common mistakes and improve your Crab code.",
             ),
             (
                 "fmt",
-                "Formats all bin and lib files of the current crate using rustfmt.",
+                "Formats all bin and lib files of the current crate using crabfmt.",
             ),
         ]);
         drop_println!(config, "Installed Commands:");
@@ -183,7 +183,7 @@ Run with 'cargo -Z [FLAG] [COMMAND]'",
 
 pub fn get_version_string(is_verbose: bool) -> String {
     let version = cargo::version();
-    let mut version_string = format!("cargo {}\n", version);
+    let mut version_string = format!("crabgo {}\n", version);
     if is_verbose {
         version_string.push_str(&format!("release: {}\n", version.version));
         if let Some(ref ci) = version.commit_info {
@@ -438,11 +438,11 @@ pub fn cli() -> Command {
     #[allow(clippy::disallowed_methods)]
     let is_rustup = std::env::var_os("RUSTUP_HOME").is_some();
     let usage = if is_rustup {
-        "cargo [+toolchain] [OPTIONS] [COMMAND]"
+        "crabgo [+toolchain] [OPTIONS] [COMMAND]"
     } else {
-        "cargo [OPTIONS] [COMMAND]"
+        "crabgo [OPTIONS] [COMMAND]"
     };
-    Command::new("cargo")
+    Command::new("crabgo")
         // Subcommands all count their args' display order independently (from 0),
         // which makes their args interspersed with global args. This puts global args last.
         .next_display_order(1000)
@@ -455,20 +455,20 @@ pub fn cli() -> Command {
         .override_usage(usage)
         .help_template(
             "\
-Rust's package manager
+Crab's package manager
 
 Usage: {usage}
 
 Options:
 {options}
 
-Some common cargo commands are (see all commands with --list):
+Some common crabgo commands are (see all commands with --list):
     build, b    Compile the current package
     check, c    Analyze the current package and report errors, but don't build object files
     clean       Remove the target directory
     doc, d      Build this package's and its dependencies' documentation
-    new         Create a new cargo package
-    init        Create a new cargo package in an existing directory
+    new         Create a new crabgo package
+    init        Create a new crabgo package in an existing directory
     add         Add dependencies to a manifest file
     remove      Remove dependencies from a manifest file
     run, r      Run a binary or example of the local package
@@ -477,14 +477,14 @@ Some common cargo commands are (see all commands with --list):
     update      Update dependencies listed in Cargo.lock
     search      Search registry for crates
     publish     Package and upload this package to the registry
-    install     Install a Rust binary. Default location is $HOME/.cargo/bin
-    uninstall   Uninstall a Rust binary
+    install     Install a Crab binary. Default location is $HOME/.cargo/bin
+    uninstall   Uninstall a Crab binary
 
-See 'cargo help <command>' for more information on a specific command.\n",
+See 'crabgo help <command>' for more information on a specific command.\n",
         )
         .arg(flag("version", "Print version info and exit").short('V'))
         .arg(flag("list", "List installed commands"))
-        .arg(opt("explain", "Run `rustc --explain CODE`").value_name("CODE"))
+        .arg(opt("explain", "Run `crabc --explain CODE`").value_name("CODE"))
         .arg(
             opt(
                 "verbose",
@@ -514,7 +514,7 @@ See 'cargo help <command>' for more information on a specific command.\n",
         .arg(multi_opt("config", "KEY=VALUE", "Override a configuration value").global(true))
         .arg(
             Arg::new("unstable-features")
-                .help("Unstable (nightly-only) flags to Cargo, see 'cargo -Z help' for details")
+                .help("Unstable (nightly-only) flags to Crabgo, see 'crabgo -Z help' for details")
                 .short('Z')
                 .value_name("FLAG")
                 .action(ArgAction::Append)
