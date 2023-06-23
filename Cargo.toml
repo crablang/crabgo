@@ -199,6 +199,12 @@ name = "cargo"
 test = false
 doc = false
 
+[[bin]]
+name = "crabgo"
+test = false
+doc = false
+path = "src/bin/cargo/main.rs"
+
 [features]
 vendored-openssl = ["openssl/vendored"]
 vendored-libgit2 = ["libgit2-sys/vendored"]
