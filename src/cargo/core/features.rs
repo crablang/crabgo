@@ -687,6 +687,26 @@ macro_rules! unstable_cli_options {
                 fields
             }
         }
+
+        #[cfg(test)]
+        mod test {
+            #[test]
+            fn ensure_sorted() {
+                // This will be printed out if the fields are not sorted.
+                let location = std::panic::Location::caller();
+                println!(
+                    "\nTo fix this test, sort the features inside the macro at {}:{}\n",
+                    location.file(),
+                    location.line()
+                );
+                let mut expected = vec![$(stringify!($element)),*];
+                expected[2..].sort();
+                snapbox::assert_eq(
+                    format!("{:#?}", expected),
+                    format!("{:#?}", vec![$(stringify!($element)),*])
+                );
+            }
+        }
     }
 }
 
@@ -710,17 +730,16 @@ unstable_cli_options!(
     config_include: bool = ("Enable the `include` key in config files"),
     credential_process: bool = ("Add a config setting to fetch registry authentication tokens by calling an external process"),
     direct_minimal_versions: bool = ("Resolve minimal dependency versions instead of maximum (direct dependencies only)"),
-    doctest_in_workspace: bool = ("Compile doctests with paths relative to the workspace root"),
     doctest_xcompile: bool = ("Compile and run doctests for non-host target using runner config"),
     dual_proc_macros: bool = ("Build proc-macros for both the host and the target"),
     features: Option<Vec<String>>  = (HIDDEN),
     gitoxide: Option<GitoxideFeatures> = ("Use gitoxide for the given git interactions, or all of them if no argument is given"),
     host_config: bool = ("Enable the [host] section in the .cargo/config.toml file"),
-    jobserver_per_rustc: bool = (HIDDEN),
     lints: bool = ("Pass `[lints]` to the linting tools"),
     minimal_versions: bool = ("Resolve minimal dependency versions instead of maximum"),
     msrv_policy: bool = ("Enable rust-version aware policy within cargo"),
     mtime_on_use: bool = ("Configure Cargo to update the mtime of used files"),
+    next_lockfile_bump: bool = (HIDDEN),
     no_index_update: bool = ("Do not update the registry index even if the cache is outdated"),
     panic_abort_tests: bool = ("Enable support to run tests with -Cpanic=abort"),
     profile_rustflags: bool = ("Enable the `rustflags` option in profiles in .cargo/config.toml file"),
@@ -728,6 +747,7 @@ unstable_cli_options!(
     registry_auth: bool = ("Authentication for alternative registries, and generate registry authentication tokens using asymmetric cryptography"),
     rustdoc_map: bool = ("Allow passing external documentation mappings to rustdoc"),
     rustdoc_scrape_examples: bool = ("Allows Rustdoc to scrape code examples from reverse-dependencies"),
+    script: bool = ("Enable support for single-file, `.rs` packages"),
     separate_nightlies: bool = (HIDDEN),
     skip_rustdoc_fingerprint: bool = (HIDDEN),
     target_applies_to_host: bool = ("Enable the `target-applies-to-host` key in the .cargo/config.toml file"),
@@ -778,6 +798,9 @@ const STABILIZED_PATCH_IN_CONFIG: &str = "The patch-in-config feature is now alw
 const STABILIZED_NAMED_PROFILES: &str = "The named-profiles feature is now always enabled.\n\
     See https://doc.rust-lang.org/nightly/cargo/reference/profiles.html#custom-profiles \
     for more information";
+
+const STABILIZED_DOCTEST_IN_WORKSPACE: &str =
+    "The doctest-in-workspace feature is now always enabled.";
 
 const STABILIZED_FUTURE_INCOMPAT_REPORT: &str =
     "The future-incompat-report feature is now always enabled.";
@@ -1059,6 +1082,7 @@ impl CliUnstable {
             "multitarget" => stabilized_warn(k, "1.64", STABILISED_MULTITARGET),
             "sparse-registry" => stabilized_warn(k, "1.68", STABILISED_SPARSE_REGISTRY),
             "terminal-width" => stabilized_warn(k, "1.68", STABILIZED_TERMINAL_WIDTH),
+            "doctest-in-workspace" => stabilized_warn(k, "1.72", STABILIZED_DOCTEST_IN_WORKSPACE),
 
             // Unstable features
             // Sorted alphabetically:
@@ -1077,7 +1101,6 @@ impl CliUnstable {
             "config-include" => self.config_include = parse_empty(k, v)?,
             "credential-process" => self.credential_process = parse_empty(k, v)?,
             "direct-minimal-versions" => self.direct_minimal_versions = parse_empty(k, v)?,
-            "doctest-in-workspace" => self.doctest_in_workspace = parse_empty(k, v)?,
             "doctest-xcompile" => self.doctest_xcompile = parse_empty(k, v)?,
             "dual-proc-macros" => self.dual_proc_macros = parse_empty(k, v)?,
             "gitoxide" => {
@@ -1087,8 +1110,8 @@ impl CliUnstable {
                 )?
             }
             "host-config" => self.host_config = parse_empty(k, v)?,
-            "jobserver-per-rustc" => self.jobserver_per_rustc = parse_empty(k, v)?,
             "lints" => self.lints = parse_empty(k, v)?,
+            "next-lockfile-bump" => self.next_lockfile_bump = parse_empty(k, v)?,
             "minimal-versions" => self.minimal_versions = parse_empty(k, v)?,
             "msrv-policy" => self.msrv_policy = parse_empty(k, v)?,
             // can also be set in .cargo/config or with and ENV
@@ -1102,6 +1125,7 @@ impl CliUnstable {
             "rustdoc-scrape-examples" => self.rustdoc_scrape_examples = parse_empty(k, v)?,
             "separate-nightlies" => self.separate_nightlies = parse_empty(k, v)?,
             "skip-rustdoc-fingerprint" => self.skip_rustdoc_fingerprint = parse_empty(k, v)?,
+            "script" => self.script = parse_empty(k, v)?,
             "target-applies-to-host" => self.target_applies_to_host = parse_empty(k, v)?,
             "unstable-options" => self.unstable_options = parse_empty(k, v)?,
             _ => bail!("unknown `-Z` flag specified: {}", k),

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ffi::OsStr;
 use std::fmt::{self, Display, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -33,6 +34,7 @@ use crate::util::{
     self, config::ConfigRelativePath, validate_package_name, Config, IntoUrl, VersionReqExt,
 };
 
+pub mod embedded;
 mod targets;
 use self::targets::targets;
 
@@ -54,11 +56,30 @@ pub fn read_manifest(
         path.display(),
         source_id
     );
-    let contents = paths::read(path).map_err(|err| ManifestError::new(err, path.into()))?;
+    let mut contents = paths::read(path).map_err(|err| ManifestError::new(err, path.into()))?;
+    let embedded = is_embedded(path);
+    if embedded {
+        if !config.cli_unstable().script {
+            return Err(ManifestError::new(
+                anyhow::anyhow!("parsing `{}` requires `-Zscript`", path.display()),
+                path.into(),
+            ));
+        }
+        contents = embedded::expand_manifest(&contents, path, config)
+            .map_err(|err| ManifestError::new(err, path.into()))?;
+    }
 
-    read_manifest_from_str(&contents, path, source_id, config)
+    read_manifest_from_str(&contents, path, embedded, source_id, config)
         .with_context(|| format!("failed to parse manifest at `{}`", path.display()))
         .map_err(|err| ManifestError::new(err, path.into()))
+}
+
+/// See also `bin/cargo/commands/run.rs`s `is_manifest_command`
+pub fn is_embedded(path: &Path) -> bool {
+    let ext = path.extension();
+    ext == Some(OsStr::new("rs")) ||
+        // Provide better errors by not considering directories to be embedded manifests
+        (ext.is_none() && path.is_file())
 }
 
 /// Parse an already-loaded `Cargo.toml` as a Cargo manifest.
@@ -69,9 +90,10 @@ pub fn read_manifest(
 /// within the manifest. For virtual manifests, these paths can only
 /// come from patched or replaced dependencies. These paths are not
 /// canonicalized.
-pub fn read_manifest_from_str(
+fn read_manifest_from_str(
     contents: &str,
     manifest_file: &Path,
+    embedded: bool,
     source_id: SourceId,
     config: &Config,
 ) -> CargoResult<(EitherManifest, Vec<PathBuf>)> {
@@ -127,7 +149,7 @@ pub fn read_manifest_from_str(
     }
     return if manifest.project.is_some() || manifest.package.is_some() {
         let (mut manifest, paths) =
-            TomlManifest::to_real_manifest(&manifest, source_id, package_root, config)?;
+            TomlManifest::to_real_manifest(&manifest, embedded, source_id, package_root, config)?;
         add_unused(manifest.warnings_mut());
         if manifest.targets().iter().all(|t| t.is_custom_build()) {
             bail!(
@@ -1573,7 +1595,79 @@ pub struct InheritableFields {
     ws_root: PathBuf,
 }
 
+/// Defines simple getter methods for inheritable fields.
+macro_rules! inheritable_field_getter {
+    ( $(($key:literal, $field:ident -> $ret:ty),)* ) => (
+        $(
+            #[doc = concat!("Gets the field `workspace.", $key, "`.")]
+            pub fn $field(&self) -> CargoResult<$ret> {
+                let Some(val) = &self.$field else  {
+                    bail!("`workspace.{}` was not defined", $key);
+                };
+                Ok(val.clone())
+            }
+        )*
+    )
+}
+
 impl InheritableFields {
+    inheritable_field_getter! {
+        // Please keep this list lexicographically ordered.
+        ("dependencies",          dependencies  -> BTreeMap<String, TomlDependency>),
+        ("lints",                 lints         -> TomlLints),
+        ("package.authors",       authors       -> Vec<String>),
+        ("package.badges",        badges        -> BTreeMap<String, BTreeMap<String, String>>),
+        ("package.categories",    categories    -> Vec<String>),
+        ("package.description",   description   -> String),
+        ("package.documentation", documentation -> String),
+        ("package.edition",       edition       -> String),
+        ("package.exclude",       exclude       -> Vec<String>),
+        ("package.homepage",      homepage      -> String),
+        ("package.include",       include       -> Vec<String>),
+        ("package.keywords",      keywords      -> Vec<String>),
+        ("package.license",       license       -> String),
+        ("package.publish",       publish       -> VecStringOrBool),
+        ("package.repository",    repository    -> String),
+        ("package.rust-version",  rust_version  -> String),
+        ("package.version",       version       -> semver::Version),
+    }
+
+    /// Gets a workspace dependency with the `name`.
+    pub fn get_dependency(&self, name: &str, package_root: &Path) -> CargoResult<TomlDependency> {
+        let Some(deps) = &self.dependencies else {
+            bail!("`workspace.dependencies` was not defined");
+        };
+        let Some(dep) = deps.get(name) else {
+            bail!("`dependency.{name}` was not found in `workspace.dependencies`");
+        };
+        let mut dep = dep.clone();
+        if let TomlDependency::Detailed(detailed) = &mut dep {
+            detailed.resolve_path(name, self.ws_root(), package_root)?;
+        }
+        Ok(dep)
+    }
+
+    /// Gets the field `workspace.package.license-file`.
+    pub fn license_file(&self, package_root: &Path) -> CargoResult<String> {
+        let Some(license_file) = &self.license_file else {
+            bail!("`workspace.package.license-file` was not defined");
+        };
+        resolve_relative_path("license-file", &self.ws_root, package_root, license_file)
+    }
+
+    /// Gets the field `workspace.package.readme`.
+    pub fn readme(&self, package_root: &Path) -> CargoResult<StringOrBool> {
+        let Some(readme) = readme_for_package(self.ws_root.as_path(), self.readme.as_ref()) else {
+            bail!("`workspace.package.readme` was not defined");
+        };
+        resolve_relative_path("readme", &self.ws_root, package_root, &readme)
+            .map(StringOrBool::String)
+    }
+
+    pub fn ws_root(&self) -> &PathBuf {
+        &self.ws_root
+    }
+
     pub fn update_deps(&mut self, deps: Option<BTreeMap<String, TomlDependency>>) {
         self.dependencies = deps;
     }
@@ -1584,167 +1678,6 @@ impl InheritableFields {
 
     pub fn update_ws_path(&mut self, ws_root: PathBuf) {
         self.ws_root = ws_root;
-    }
-
-    pub fn dependencies(&self) -> CargoResult<BTreeMap<String, TomlDependency>> {
-        self.dependencies.clone().map_or(
-            Err(anyhow!("`workspace.dependencies` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn lints(&self) -> CargoResult<TomlLints> {
-        self.lints
-            .clone()
-            .map_or(Err(anyhow!("`workspace.lints` was not defined")), |d| Ok(d))
-    }
-
-    pub fn get_dependency(&self, name: &str, package_root: &Path) -> CargoResult<TomlDependency> {
-        self.dependencies.clone().map_or(
-            Err(anyhow!("`workspace.dependencies` was not defined")),
-            |deps| {
-                deps.get(name).map_or(
-                    Err(anyhow!(
-                        "`dependency.{}` was not found in `workspace.dependencies`",
-                        name
-                    )),
-                    |dep| {
-                        let mut dep = dep.clone();
-                        if let TomlDependency::Detailed(detailed) = &mut dep {
-                            detailed.resolve_path(name, self.ws_root(), package_root)?
-                        }
-                        Ok(dep)
-                    },
-                )
-            },
-        )
-    }
-
-    pub fn version(&self) -> CargoResult<semver::Version> {
-        self.version.clone().map_or(
-            Err(anyhow!("`workspace.package.version` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn authors(&self) -> CargoResult<Vec<String>> {
-        self.authors.clone().map_or(
-            Err(anyhow!("`workspace.package.authors` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn description(&self) -> CargoResult<String> {
-        self.description.clone().map_or(
-            Err(anyhow!("`workspace.package.description` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn homepage(&self) -> CargoResult<String> {
-        self.homepage.clone().map_or(
-            Err(anyhow!("`workspace.package.homepage` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn documentation(&self) -> CargoResult<String> {
-        self.documentation.clone().map_or(
-            Err(anyhow!("`workspace.package.documentation` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn readme(&self, package_root: &Path) -> CargoResult<StringOrBool> {
-        readme_for_package(self.ws_root.as_path(), self.readme.clone()).map_or(
-            Err(anyhow!("`workspace.package.readme` was not defined")),
-            |readme| {
-                let rel_path =
-                    resolve_relative_path("readme", &self.ws_root, package_root, &readme)?;
-                Ok(StringOrBool::String(rel_path))
-            },
-        )
-    }
-
-    pub fn keywords(&self) -> CargoResult<Vec<String>> {
-        self.keywords.clone().map_or(
-            Err(anyhow!("`workspace.package.keywords` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn categories(&self) -> CargoResult<Vec<String>> {
-        self.categories.clone().map_or(
-            Err(anyhow!("`workspace.package.categories` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn license(&self) -> CargoResult<String> {
-        self.license.clone().map_or(
-            Err(anyhow!("`workspace.package.license` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn license_file(&self, package_root: &Path) -> CargoResult<String> {
-        self.license_file.clone().map_or(
-            Err(anyhow!("`workspace.package.license_file` was not defined")),
-            |d| resolve_relative_path("license-file", &self.ws_root, package_root, &d),
-        )
-    }
-
-    pub fn repository(&self) -> CargoResult<String> {
-        self.repository.clone().map_or(
-            Err(anyhow!("`workspace.package.repository` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn publish(&self) -> CargoResult<VecStringOrBool> {
-        self.publish.clone().map_or(
-            Err(anyhow!("`workspace.package.publish` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn edition(&self) -> CargoResult<String> {
-        self.edition.clone().map_or(
-            Err(anyhow!("`workspace.package.edition` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn rust_version(&self) -> CargoResult<String> {
-        self.rust_version.clone().map_or(
-            Err(anyhow!("`workspace.package.rust-version` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn badges(&self) -> CargoResult<BTreeMap<String, BTreeMap<String, String>>> {
-        self.badges.clone().map_or(
-            Err(anyhow!("`workspace.package.badges` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn exclude(&self) -> CargoResult<Vec<String>> {
-        self.exclude.clone().map_or(
-            Err(anyhow!("`workspace.package.exclude` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn include(&self) -> CargoResult<Vec<String>> {
-        self.include.clone().map_or(
-            Err(anyhow!("`workspace.package.include` was not defined")),
-            |d| Ok(d),
-        )
-    }
-
-    pub fn ws_root(&self) -> &PathBuf {
-        &self.ws_root
     }
 }
 
@@ -1975,6 +1908,7 @@ impl TomlManifest {
 
     pub fn to_real_manifest(
         me: &Rc<TomlManifest>,
+        embedded: bool,
         source_id: SourceId,
         package_root: &Path,
         config: &Config,
@@ -2412,7 +2346,6 @@ impl TomlManifest {
         let empty_features = BTreeMap::new();
 
         let summary = Summary::new(
-            config,
             pkgid,
             deps,
             me.features.as_ref().unwrap_or(&empty_features),
@@ -2442,7 +2375,8 @@ impl TomlManifest {
                     .readme
                     .clone()
                     .map(|mw| mw.resolve("readme", || inherit()?.readme(package_root)))
-                    .transpose()?,
+                    .transpose()?
+                    .as_ref(),
             ),
             authors: package
                 .authors
@@ -2643,6 +2577,7 @@ impl TomlManifest {
             package.metabuild.clone().map(|sov| sov.0),
             resolve_behavior,
             rustflags,
+            embedded,
         );
         if package.license_file.is_some() && package.license.is_some() {
             manifest.warnings_mut().add_warning(
@@ -3039,7 +2974,7 @@ fn inheritable_from_path(
 }
 
 /// Returns the name of the README file for a [`TomlPackage`].
-pub fn readme_for_package(package_root: &Path, readme: Option<StringOrBool>) -> Option<String> {
+pub fn readme_for_package(package_root: &Path, readme: Option<&StringOrBool>) -> Option<String> {
     match &readme {
         None => default_readme_from_package_root(package_root),
         Some(value) => match value {

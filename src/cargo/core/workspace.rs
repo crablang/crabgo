@@ -381,7 +381,21 @@ impl<'cfg> Workspace<'cfg> {
     pub fn target_dir(&self) -> Filesystem {
         self.target_dir
             .clone()
-            .unwrap_or_else(|| Filesystem::new(self.root().join("target")))
+            .unwrap_or_else(|| self.default_target_dir())
+    }
+
+    fn default_target_dir(&self) -> Filesystem {
+        if self.root_maybe().is_embedded() {
+            let hash = crate::util::hex::short_hash(&self.root_manifest().to_string_lossy());
+            let mut rel_path = PathBuf::new();
+            rel_path.push("target");
+            rel_path.push(&hash[0..2]);
+            rel_path.push(&hash[2..]);
+
+            self.config().home().join(rel_path)
+        } else {
+            Filesystem::new(self.root().join("target"))
+        }
     }
 
     /// Returns the root `[replace]` section of this workspace.
@@ -724,6 +738,10 @@ impl<'cfg> Workspace<'cfg> {
     ) -> CargoResult<()> {
         let manifest_path = paths::normalize_path(manifest_path);
         if self.members.contains(&manifest_path) {
+            return Ok(());
+        }
+        if is_path_dep && self.root_maybe().is_embedded() {
+            // Embedded manifests cannot have workspace members
             return Ok(());
         }
         if is_path_dep
@@ -1578,6 +1596,14 @@ impl MaybePackage {
         match *self {
             MaybePackage::Package(ref p) => p.manifest().workspace_config(),
             MaybePackage::Virtual(ref vm) => vm.workspace_config(),
+        }
+    }
+
+    /// Has an embedded manifest (single-file package)
+    pub fn is_embedded(&self) -> bool {
+        match self {
+            MaybePackage::Package(p) => p.manifest().is_embedded(),
+            MaybePackage::Virtual(_) => false,
         }
     }
 }

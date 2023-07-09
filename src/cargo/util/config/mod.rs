@@ -69,9 +69,11 @@ use self::ConfigValue as CV;
 use crate::core::compiler::rustdoc::RustdocExternMap;
 use crate::core::shell::Verbosity;
 use crate::core::{features, CliUnstable, Shell, SourceId, Workspace, WorkspaceRootConfig};
-use crate::ops::{self, RegistryCredentialConfig};
+use crate::ops::RegistryCredentialConfig;
 use crate::util::auth::Secret;
 use crate::util::errors::CargoResult;
+use crate::util::network::http::configure_http_handle;
+use crate::util::network::http::http_handle;
 use crate::util::CanonicalUrl;
 use crate::util::{internal, toml as cargo_toml};
 use crate::util::{try_canonicalize, validate_package_name};
@@ -363,7 +365,7 @@ impl Config {
         self.registry_base_path().join("index")
     }
 
-    /// Gets the Cargo registry cache directory (`<cargo_home>/registry/path`).
+    /// Gets the Cargo registry cache directory (`<cargo_home>/registry/cache`).
     pub fn registry_cache_path(&self) -> Filesystem {
         self.registry_base_path().join("cache")
     }
@@ -1273,6 +1275,16 @@ impl Config {
                 return Ok(Vec::new());
             }
         };
+
+        for (path, abs_path, def) in &includes {
+            if abs_path.extension() != Some(OsStr::new("toml")) {
+                bail!(
+                    "expected a config include path ending with `.toml`, \
+                     but found `{path}` from `{def}`",
+                )
+            }
+        }
+
         Ok(includes)
     }
 
@@ -1706,19 +1718,23 @@ impl Config {
     pub fn http(&self) -> CargoResult<&RefCell<Easy>> {
         let http = self
             .easy
-            .try_borrow_with(|| ops::http_handle(self).map(RefCell::new))?;
+            .try_borrow_with(|| http_handle(self).map(RefCell::new))?;
         {
             let mut http = http.borrow_mut();
             http.reset();
-            let timeout = ops::configure_http_handle(self, &mut http)?;
+            let timeout = configure_http_handle(self, &mut http)?;
             timeout.configure(&mut http)?;
         }
         Ok(http)
     }
 
     pub fn http_config(&self) -> CargoResult<&CargoHttpConfig> {
-        self.http_config
-            .try_borrow_with(|| self.get::<CargoHttpConfig>("http"))
+        self.http_config.try_borrow_with(|| {
+            let mut http = self.get::<CargoHttpConfig>("http")?;
+            let curl_v = curl::Version::get();
+            disables_multiplexing_for_bad_curl(curl_v.version(), &mut http, self);
+            Ok(http)
+        })
     }
 
     pub fn future_incompat_config(&self) -> CargoResult<&CargoFutureIncompatConfig> {
@@ -2747,6 +2763,79 @@ impl Tool {
         match self {
             Tool::Rustc => "rustc",
             Tool::Rustdoc => "rustdoc",
+        }
+    }
+}
+
+/// Disable HTTP/2 multiplexing for some broken versions of libcurl.
+///
+/// In certain versions of libcurl when proxy is in use with HTTP/2
+/// multiplexing, connections will continue stacking up. This was
+/// fixed in libcurl 8.0.0 in curl/curl@821f6e2a89de8aec1c7da3c0f381b92b2b801efc
+///
+/// However, Cargo can still link against old system libcurl if it is from a
+/// custom built one or on macOS. For those cases, multiplexing needs to be
+/// disabled when those versions are detected.
+fn disables_multiplexing_for_bad_curl(
+    curl_version: &str,
+    http: &mut CargoHttpConfig,
+    config: &Config,
+) {
+    use crate::util::network;
+
+    if network::proxy::http_proxy_exists(http, config) && http.multiplexing.is_none() {
+        let bad_curl_versions = ["7.87.0", "7.88.0", "7.88.1"];
+        if bad_curl_versions
+            .iter()
+            .any(|v| curl_version.starts_with(v))
+        {
+            log::info!("disabling multiplexing with proxy, curl version is {curl_version}");
+            http.multiplexing = Some(false);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::disables_multiplexing_for_bad_curl;
+    use super::CargoHttpConfig;
+    use super::Config;
+    use super::Shell;
+
+    #[test]
+    fn disables_multiplexing() {
+        let mut config = Config::new(Shell::new(), "".into(), "".into());
+        config.set_search_stop_path(std::path::PathBuf::new());
+        config.set_env(Default::default());
+
+        let mut http = CargoHttpConfig::default();
+        http.proxy = Some("127.0.0.1:3128".into());
+        disables_multiplexing_for_bad_curl("7.88.1", &mut http, &config);
+        assert_eq!(http.multiplexing, Some(false));
+
+        let cases = [
+            (None, None, "7.87.0", None),
+            (None, None, "7.88.0", None),
+            (None, None, "7.88.1", None),
+            (None, None, "8.0.0", None),
+            (Some("".into()), None, "7.87.0", Some(false)),
+            (Some("".into()), None, "7.88.0", Some(false)),
+            (Some("".into()), None, "7.88.1", Some(false)),
+            (Some("".into()), None, "8.0.0", None),
+            (Some("".into()), Some(false), "7.87.0", Some(false)),
+            (Some("".into()), Some(false), "7.88.0", Some(false)),
+            (Some("".into()), Some(false), "7.88.1", Some(false)),
+            (Some("".into()), Some(false), "8.0.0", Some(false)),
+        ];
+
+        for (proxy, multiplexing, curl_v, result) in cases {
+            let mut http = CargoHttpConfig {
+                multiplexing,
+                proxy,
+                ..Default::default()
+            };
+            disables_multiplexing_for_bad_curl(curl_v, &mut http, &config);
+            assert_eq!(http.multiplexing, result);
         }
     }
 }

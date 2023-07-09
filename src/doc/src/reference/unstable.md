@@ -52,10 +52,12 @@ how the feature works:
   ```
 
 Each new feature described below should explain how to use it.
+For the latest nightly, see the [nightly version] of this page.
 
 [config file]: config.md
 [nightly channel]: ../../book/appendix-07-nightly-rust.html
 [stabilized]: https://doc.crates.io/contrib/process/unstable.html#stabilization
+[nightly version]: https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#script
 
 ### List of unstable features
 
@@ -85,7 +87,6 @@ Each new feature described below should explain how to use it.
     * [host-config](#host-config) --- Allows setting `[target]`-like configuration settings for host build targets.
     * [target-applies-to-host](#target-applies-to-host) --- Alters whether certain flags will be passed to host build targets.
 * rustdoc
-    * [`doctest-in-workspace`](#doctest-in-workspace) --- Fixes workspace-relative paths when running doctests.
     * [rustdoc-map](#rustdoc-map) --- Provides mappings for documentation to link to external sites like [docs.rs](https://docs.rs/).
     * [scrape-examples](#scrape-examples) --- Shows examples within documentation.
 * `Cargo.toml` extensions
@@ -107,6 +108,7 @@ Each new feature described below should explain how to use it.
     * [registry-auth](#registry-auth) --- Adds support for authenticated registries, and generate registry authentication tokens using asymmetric cryptography.
 * Other
     * [gitoxide](#gitoxide) --- Use `gitoxide` instead of `git2` for a set of operations.
+    * [script](#script) --- Enable support for single-file `.rs` packages.
 
 ### allow-features
 
@@ -450,27 +452,30 @@ cargo check --keep-going -Z unstable-options
 ### config-include
 * Tracking Issue: [#7723](https://github.com/rust-lang/cargo/issues/7723)
 
+This feature requires the `-Zconfig-include` command-line option.
+
 The `include` key in a config file can be used to load another config file. It
-takes a string for a path to another file relative to the config file, or a
-list of strings. It requires the `-Zconfig-include` command-line option.
+takes a string for a path to another file relative to the config file, or an
+array of config file paths. Only path ending with `.toml` is accepted.
 
 ```toml
-# .cargo/config
-include = '../../some-common-config.toml'
+# a path ending with `.toml`
+include = "path/to/mordor.toml"
+
+# or an array of paths
+include = ["frodo.toml", "samwise.toml"]
 ```
 
-The config values are first loaded from the include path, and then the config
-file's own values are merged on top of it.
+Unlike other config values, the merge behavior of the `include` key is
+different. When a config file contains an `include` key:
 
-This can be paired with [config-cli](#config-cli) to specify a file to load
-from the command-line. Pass a path to a config file as the argument to
-`--config`:
-
-```console
-cargo +nightly -Zunstable-options -Zconfig-include --config somefile.toml build
-```
-
-CLI paths are relative to the current working directory.
+1. The config values are first loaded from the `include` path.
+    * If the value of the `include` key is an array of paths, the config values
+      are loaded and merged from left to right for each path.
+    * Recurse this step if the config values from the `include` path also
+      contain an `include` key.
+2. Then, the config file's own values are merged on top of the config
+   from the `include` path.
 
 ### target-applies-to-host
 * Original Pull Request: [#9322](https://github.com/rust-lang/cargo/pull/9322)
@@ -1185,24 +1190,6 @@ cargo +nightly -Zunstable-options config get build.rustflags
 If no config value is included, it will display all config values. See the
 `--help` output for more options available.
 
-### `doctest-in-workspace`
-
-* Tracking Issue: [#9427](https://github.com/rust-lang/cargo/issues/9427)
-
-The `-Z doctest-in-workspace` flag changes the behavior of the current working
-directory used when running doctests. Historically, Cargo has run `rustdoc
---test` relative to the root of the package, with paths relative from that
-root. However, this is inconsistent with how `rustc` and `rustdoc` are
-normally run in a workspace, where they are run relative to the workspace
-root. This inconsistency causes problems in various ways, such as when passing
-RUSTDOCFLAGS with relative paths, or dealing with diagnostic output.
-
-The `-Z doctest-in-workspace` flag causes cargo to switch to running `rustdoc`
-from the root of the workspace. It also passes the `--test-run-directory` to
-`rustdoc` so that when *running* the tests, they are run from the root of the
-package. This preserves backwards compatibility and is consistent with how
-normal unittests are run.
-
 ### rustc `--print`
 
 * Tracking Issue: [#9357](https://github.com/rust-lang/cargo/issues/9357)
@@ -1391,6 +1378,113 @@ Valid operations are the following:
   - `~/.cargo/git/checkouts/*-shallow`
 * When the unstable feature is on, fetching/cloning a git repository is always a shallow fetch. This roughly equals to `git fetch --depth 1` everywhere.
 * Even with the presence of `Cargo.lock` or specifying a commit `{ rev = "…" }`, gitoxide is still smart enough to shallow fetch without unshallowing the existing repository.
+
+### script
+
+* Tracking Issue: [#12207](https://github.com/rust-lang/cargo/issues/12207)
+
+Cargo can directly run `.rs` files as:
+```console
+$ cargo +nightly -Zscript file.rs
+```
+where `file.rs` can be as simple as:
+```rust
+fn main() {}
+```
+
+A user may optionally specify a manifest in a `cargo` code fence in a module-level comment, like:
+```rust
+#!/usr/bin/env -S cargo +nightly -Zscript
+
+//! ```cargo
+//! [dependencies]
+//! clap = { version = "4.2", features = ["derive"] }
+//! ```
+
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[clap(version)]
+struct Args {
+    #[clap(short, long, help = "Path to config")]
+    config: Option<std::path::PathBuf>,
+}
+
+fn main() {
+    let args = Args::parse();
+    println!("{:?}", args);
+}
+```
+
+#### Single-file packages
+
+In addition to today's multi-file packages (`Cargo.toml` file with other `.rs`
+files), we are adding the concept of single-file packages which may contain an
+embedded manifest.  There is no required distinguishment for a single-file
+`.rs` package from any other `.rs` file.
+
+Single-file packages may be selected via `--manifest-path`, like
+`cargo test --manifest-path foo.rs`. Unlike `Cargo.toml`, these files cannot be auto-discovered.
+
+A single-file package may contain an embedded manifest.  An embedded manifest
+is stored using `TOML` in a markdown code-fence with `cargo` at the start of the
+infostring inside a target-level doc-comment.  It is an error to have multiple
+`cargo` code fences in the target-level doc-comment.  We can relax this later,
+either merging the code fences or ignoring later code fences.
+
+Supported forms of embedded manifest are:
+``````rust
+//! ```cargo
+//! ```
+``````
+``````rust
+/*!
+ * ```cargo
+ * ```
+ */
+``````
+
+Inferred / defaulted manifest fields:
+- `package.name = <slugified file stem>`
+- `package.version = "0.0.0"` to [call attention to this crate being used in unexpected places](https://matklad.github.io/2021/08/22/large-rust-workspaces.html#Smaller-Tips)
+- `package.publish = false` to avoid accidental publishes, particularly if we
+  later add support for including them in a workspace.
+- `package.edition = <current>` to avoid always having to add an embedded
+  manifest at the cost of potentially breaking scripts on rust upgrades
+  - Warn when `edition` is unspecified to raise awareness of this
+
+Disallowed manifest fields:
+- `[workspace]`, `[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]`
+- `package.workspace`, `package.build`, `package.links`, `package.autobins`, `package.autoexamples`, `package.autotests`, `package.autobenches`
+
+The default `CARGO_TARGET_DIR` for single-file packages is at `$CARGO_HOME/target/<hash>`:
+- Avoid conflicts from multiple single-file packages being in the same directory
+- Avoid problems with the single-file package's parent directory being read-only
+- Avoid cluttering the user's directory
+
+The lockfile for single-file packages will be placed in `CARGO_TARGET_DIR`.  In
+the future, when workspaces are supported, that will allow a user to have a
+persistent lockfile.
+
+#### Manifest-commands
+
+You may pass a manifest directly to the `cargo` command, without a subcommand,
+like `foo/Cargo.toml` or a single-file package like `foo.rs`.  This is mostly
+intended for being put in `#!` lines.
+
+The precedence for how to interpret `cargo <subcommand>` is
+1. Built-in xor single-file packages
+2. Aliases
+3. External subcommands
+
+A parameter is identified as a manifest-command if it has one of:
+- Path separators
+- A `.rs` extension
+- The file name is `Cargo.toml`
+
+Differences between `cargo run --manifest-path <path>` and `cargo <path>`
+- `cargo <path>` runs with the config for `<path>` and not the current dir, more like `cargo install --path <path>`
+- `cargo <path>` is at a verbosity level below the normal default.  Pass `-v` to get normal output.
 
 ### `[lints]`
 
@@ -1693,3 +1787,11 @@ See [Registry Protocols](registries.md#registry-protocols) for more information.
 The [`cargo logout`] command has been stabilized in the 1.70 release.
 
 [target triple]: ../appendix/glossary.md#target '"target" (glossary)'
+
+
+### `doctest-in-workspace`
+
+The `-Z doctest-in-workspace` option for `cargo test` has been stabilized and
+enabled by default in the 1.72 release. See the
+[`cargo test` documentation](../commands/cargo-test.md#working-directory-of-tests)
+for more information about the working directory for compiling and running tests.

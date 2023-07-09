@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use bytesize::ByteSize;
-use curl::easy::{Easy, HttpVersion};
+use curl::easy::Easy;
 use curl::multi::{EasyHandle, Multi};
 use lazycell::LazyCell;
-use log::{debug, warn};
+use log::debug;
 use semver::Version;
 use serde::Serialize;
 
@@ -24,10 +24,11 @@ use crate::core::resolver::{HasDevUnits, Resolve};
 use crate::core::source::MaybePackage;
 use crate::core::{Dependency, Manifest, PackageId, SourceId, Target};
 use crate::core::{SourceMap, Summary, Workspace};
-use crate::ops;
 use crate::util::config::PackageCacheLock;
 use crate::util::errors::{CargoResult, HttpNotSuccessful, DEBUG_HEADERS};
 use crate::util::interning::InternedString;
+use crate::util::network::http::http_handle_and_timeout;
+use crate::util::network::http::HttpTimeout;
 use crate::util::network::retry::{Retry, RetryResult};
 use crate::util::network::sleep::SleepTracker;
 use crate::util::{self, internal, Config, Progress, ProgressStyle};
@@ -348,7 +349,7 @@ pub struct Downloads<'a, 'cfg> {
     /// Note that timeout management is done manually here instead of in libcurl
     /// because we want to apply timeouts to an entire batch of operations, not
     /// any one particular single operation.
-    timeout: ops::HttpTimeout,
+    timeout: HttpTimeout,
     /// Last time bytes were received.
     updated_at: Cell<Instant>,
     /// This is a slow-speed check. It is reset to `now + timeout_duration`
@@ -441,7 +442,7 @@ impl<'cfg> PackageSet<'cfg> {
 
     pub fn enable_download<'a>(&'a self) -> CargoResult<Downloads<'a, 'cfg>> {
         assert!(!self.downloading.replace(true));
-        let timeout = ops::HttpTimeout::new(self.config)?;
+        let timeout = HttpTimeout::new(self.config)?;
         Ok(Downloads {
             start: Instant::now(),
             set: self,
@@ -713,7 +714,7 @@ impl<'a, 'cfg> Downloads<'a, 'cfg> {
         debug!("downloading {} as {}", id, token);
         assert!(self.pending_ids.insert(id));
 
-        let (mut handle, _timeout) = ops::http_handle_and_timeout(self.set.config)?;
+        let (mut handle, _timeout) = http_handle_and_timeout(self.set.config)?;
         handle.get(true)?;
         handle.url(&url)?;
         handle.follow_location(true)?; // follow redirects
@@ -725,32 +726,8 @@ impl<'a, 'cfg> Downloads<'a, 'cfg> {
             handle.http_headers(headers)?;
         }
 
-        // Enable HTTP/2 to be used as it'll allow true multiplexing which makes
-        // downloads much faster.
-        //
-        // Currently Cargo requests the `http2` feature of the `curl` crate
-        // which means it should always be built in. On OSX, however, we ship
-        // cargo still linked against the system libcurl. Building curl with
-        // ALPN support for HTTP/2 requires newer versions of OSX (the
-        // SecureTransport API) than we want to ship Cargo for. By linking Cargo
-        // against the system libcurl then older curl installations won't use
-        // HTTP/2 but newer ones will. All that to basically say we ignore
-        // errors here on OSX, but consider this a fatal error to not activate
-        // HTTP/2 on all other platforms.
-        if self.set.multiplexing {
-            crate::try_old_curl!(handle.http_version(HttpVersion::V2), "HTTP2");
-        } else {
-            handle.http_version(HttpVersion::V11)?;
-        }
-
-        // This is an option to `libcurl` which indicates that if there's a
-        // bunch of parallel requests to the same host they all wait until the
-        // pipelining status of the host is known. This means that we won't
-        // initiate dozens of connections to crates.io, but rather only one.
-        // Once the main one is opened we realized that pipelining is possible
-        // and multiplexing is possible with static.crates.io. All in all this
-        // reduces the number of connections down to a more manageable state.
-        crate::try_old_curl!(handle.pipewait(true), "pipewait");
+        // Enable HTTP/2 if possible.
+        crate::try_old_curl_http2_pipewait!(self.set.multiplexing, handle);
 
         handle.write_function(move |buf| {
             debug!("{} - {} bytes of data", token, buf.len());
