@@ -516,7 +516,7 @@ pub fn cli() -> Command {
     #[allow(clippy::disallowed_methods)]
     let is_rustup = std::env::var_os("RUSTUP_HOME").is_some();
     let usage = if is_rustup {
-        "crabgo [+toolchain] [OPTIONS] [COMMAND]\n       crabgo [+toolchain] [OPTIONS] -Zscript <MANIFEST_RS> [ARGS]..."
+        "crabgo [+toolchain] [OPTIONS] [COMMAND]"
     } else {
         "crabgo [OPTIONS] [COMMAND]"
     };

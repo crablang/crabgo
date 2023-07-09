@@ -13,7 +13,7 @@ Crabgo downloads your Crab project’s dependencies and compiles your project.
 <!-- 
 [![CI](https://github.com/rust-lang/cargo/actions/workflows/main.yml/badge.svg?branch=auto-cargo)](https://github.com/rust-lang/cargo/actions/workflows/main.yml) -->
 
-Code documentation: <https://doc.rust-lang.org/nightly/nightly-rustc/cargo/>
+## Installing Crabgo
 
 ## Installing Crabgo
 
