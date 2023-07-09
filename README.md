@@ -15,8 +15,6 @@ Crabgo downloads your Crab project’s dependencies and compiles your project.
 
 ## Installing Crabgo
 
-## Installing Crabgo
-
 Crabgo is distributed by default with Crab, so if you've got `crabc` installed
 locally you probably also have `crabgo` installed locally.
 
